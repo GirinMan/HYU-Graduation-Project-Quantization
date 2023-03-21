@@ -156,7 +156,12 @@ def main():
 
     # load dataset
     ids_to_labels = {id:label for label, id in data_args.labels_to_ids.items()}
-    data = load_dataset(data_args.dataset_name)
+    if '/' in data_args.dataset_name:
+        dataset_names = data_args.dataset_name.split('/')
+        data = load_dataset(dataset_names[0], dataset_names[1])
+    else:
+        data = load_dataset(data_args.dataset_name)
+    dataset_keys = [key for key in data.keys()]
     data = get_prompt_dataset(dataset=data,
                               tokenizer=tokenizer,
                               max_len=data_args.max_len,
@@ -168,7 +173,7 @@ def main():
                             )
     
     if training_args.do_eval:
-        eval_dataloader = get_eval_dataloader(data['test'], training_args.per_device_eval_batch_size)
+        eval_dataloader = get_eval_dataloader(data[dataset_keys[1]], training_args.per_device_eval_batch_size)
 
         def validation_step(model, tokenizer, batch, first):
             generated_ids = model.generate(
@@ -222,7 +227,7 @@ def main():
             if is_binary:
                 f1 = f1_score(labels, preds)
             else:
-                f1 = f1_score(y_true=labels, y_pred=preds, labels=class_ids, average="micro")
+                f1 = f1_score(y_true=labels, y_pred=preds, labels=class_ids, average="macro")
 
             metrics = {}
             metrics['accuracy'] = acc
@@ -289,10 +294,10 @@ def main():
     # model = PeftModel.from_pretrained(model, peft_model_id)
     # # You can then directly use the trained model or the model that you have loaded from the 🤗 Hub for inference
 
-    batch = tokenizer("다음 문장은 긍정일까요 부정일까요?\n아 진짜 재밌다 ㅋㅋㅋㅋㅋ 완전 인생영화임\n정답:", return_tensors="pt")
-
+    batch = tokenizer("다음 제목의 주제를 IT과학, 경제, 사회, 생활문화, 세계, 스포츠, 정치 중 하나로 분류하세요.\n기업들 현금 실탄 쌓자…코로나 위기에 자산 처분 잇따라\n주제:", return_tensors="pt")
+    batch.to('cuda')
     with torch.cuda.amp.autocast():
-        output_tokens = model.generate(input_ids = batch['input_ids'], max_new_tokens=4)
+        output_tokens = model.generate(input_ids = batch['input_ids'], max_new_tokens=data_args.max_label_len + 1)
 
     logger.info("\n\n", tokenizer.decode(output_tokens[0], skip_special_tokens=True))
 
