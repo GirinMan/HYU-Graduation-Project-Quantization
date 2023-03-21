@@ -133,10 +133,17 @@ if __name__ == '__main__':
 
     tokenizer = AutoTokenizer.from_pretrained("EleutherAI/polyglot-ko-1.3b")
 
-    nsmc = datasets.load_dataset('nsmc')
-    nsmc = get_prompt_dataset(nsmc, tokenizer, max_label_len=1, ids_to_labels={0:"부정", 1:"긍정"})
-
-    train = get_train_dataloader(nsmc)
+    dataset = datasets.load_dataset('klue', 'ynat')
+    dataset = get_prompt_dataset(dataset=dataset,
+                              tokenizer=tokenizer,
+                              max_len=64,
+                              max_label_len=2,
+                              prefix="다음 문장의 주제를 IT과학, 경제, 사회, 생활문화, 세계, 스포츠, 정치 중 하나로 분류하세요.\n",
+                              suffix="\n주제:",
+                              columns=['title', 'label'],
+                              ids_to_labels={0: 'IT과학', 1: '경제', 2: '사회', 3: '생활문화', 4: '세계', 5: '스포츠', 6: '정치'},                           
+                            )
+    train = get_train_dataloader(dataset['train'])
     for batch in train:
         print(batch)
         decoded_inputs = tokenizer.batch_decode(batch['input_ids'], skip_special_tokens=False)
@@ -145,7 +152,7 @@ if __name__ == '__main__':
             print()
         break
 
-    eval = get_eval_dataloader(nsmc)
+    eval = get_eval_dataloader(dataset['validation'])
     for batch in eval:
         print(batch)
         decoded_inputs = tokenizer.batch_decode(batch['input_ids'], skip_special_tokens=False)
