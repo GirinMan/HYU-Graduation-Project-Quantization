@@ -28,14 +28,18 @@ def get_prompt_dataset(dataset,
                        columns=['document', 'label'],
                        ids_to_labels=None):
     
+    dataset_splits = [key for key in dataset.keys()]
+    if len(dataset_splits) > 2:
+        dataset.popitem()
+
     tokenizer.padding_side = 'left'
     tokenizer.truncation_side = 'left'
     max_label_len = max_label_len + 1
 
     template=lambda o: f'{prefix}{o.strip()}{suffix}'
 
-    tokenized_prefix = tokenizer.encode(prefix)
-    tokenized_suffix = tokenizer.encode(suffix)
+    tokenized_prefix = tokenizer.encode(prefix, add_special_tokens=False)
+    tokenized_suffix = tokenizer.encode(suffix, add_special_tokens=False)
     prefix_len = len(tokenized_prefix)
     suffix_len = len(tokenized_suffix)
 
@@ -49,8 +53,8 @@ def get_prompt_dataset(dataset,
             labels = [ids_to_labels[i] for i in labels]
         labels = [l + tokenizer.eos_token for l in labels]
         
-        tokenized_documents = tokenizer(documents)['input_ids']
-        tokenized_labels = tokenizer(labels)['input_ids']
+        tokenized_documents = tokenizer(documents, add_special_tokens=False)['input_ids']
+        tokenized_labels = tokenizer(labels, add_special_tokens=False)['input_ids']
 
         token_ids = []
         label_ids = []
@@ -131,17 +135,18 @@ def get_eval_dataloader(dataset, batch_size=4, num_workers=0, collate_fn=collate
 if __name__ == '__main__':
     from transformers import AutoTokenizer
 
-    tokenizer = AutoTokenizer.from_pretrained("EleutherAI/polyglot-ko-1.3b")
+    tokenizer = AutoTokenizer.from_pretrained("facebook/opt-13b")
 
-    dataset = datasets.load_dataset('klue', 'ynat')
+    dataset = datasets.load_dataset('imdb')
+    
     dataset = get_prompt_dataset(dataset=dataset,
                               tokenizer=tokenizer,
-                              max_len=64,
-                              max_label_len=2,
-                              prefix="다음 문장의 주제를 IT과학, 경제, 사회, 생활문화, 세계, 스포츠, 정치 중 하나로 분류하세요.\n",
-                              suffix="\n주제:",
-                              columns=['title', 'label'],
-                              ids_to_labels={0: 'IT과학', 1: '경제', 2: '사회', 3: '생활문화', 4: '세계', 5: '스포츠', 6: '정치'},                           
+                              max_len=256,
+                              max_label_len=1,
+                              prefix="Is the next sentence positive or negative?\n",
+                              suffix="\nAnswer:",
+                              columns=["text", "label"],
+                              ids_to_labels={0 : "neg", 1 : "pos"},                           
                             )
     train = get_train_dataloader(dataset['train'])
     for batch in train:
@@ -152,7 +157,7 @@ if __name__ == '__main__':
             print()
         break
 
-    eval = get_eval_dataloader(dataset['validation'])
+    eval = get_eval_dataloader(dataset['test'])
     for batch in eval:
         print(batch)
         decoded_inputs = tokenizer.batch_decode(batch['input_ids'], skip_special_tokens=False)

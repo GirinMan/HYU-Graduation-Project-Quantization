@@ -299,7 +299,7 @@ def main():
     with torch.cuda.amp.autocast():
         output_tokens = model.generate(input_ids = batch['input_ids'], max_new_tokens=data_args.max_label_len + 1)
 
-    logger.info("\n\n", tokenizer.decode(output_tokens[0], skip_special_tokens=True))
+    logger.info(f"Generated: {tokenizer.decode(output_tokens[0], skip_special_tokens=True)}")
 
 if __name__ == "__main__":
     main()
