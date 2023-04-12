@@ -5,10 +5,10 @@ from time import time
 from datasets import load_dataset
 from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model, prepare_model_for_int8_training
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments, Trainer, TrainerCallback, set_seed
-from template_dataset import get_prompt_dataset, get_eval_dataloader, collate_fn
 from loguru import logger
 from sklearn.metrics import accuracy_score, f1_score
 from tqdm import tqdm
+from dataset_factory import DatasetFactory
 
 @dataclass
 class ModelArguments:
@@ -24,6 +24,9 @@ class ModelArguments:
             )
         },
     )
+    train_in_8bit: Optional[bool] = field(
+        default=True, metadata={"help": "Train with bitsandbytes or not"}
+    )
 
 
 @dataclass
@@ -31,30 +34,8 @@ class DataTrainingArguments:
     dataset_name: Optional[str] = field(
         default="nsmc", metadata={"help": "The name of the dataset to use (via the datasets library)."}
     )
-    block_size: Optional[int] = field(
-        default=1024, metadata={"help": "The name of the dataset to use (via the datasets library)."}
-    )
     max_len: Optional[int] = field(
         default=64, metadata={"help": "The maximum length of each data in dataset to use."}
-    )
-    max_label_len: Optional[int] = field(
-        default=4, metadata={"help": "The maximum length of each label in dataset to use."}
-    )
-    prefix: Optional[str] = field(
-        default="다음 문장은 긍정일까요 부정일까요?\n",
-        metadata={"help": "The prefix string used for template based training."}
-    )
-    suffix: Optional[str] = field(
-        default="\n정답:",
-        metadata={"help": "The suffix string used for template based training."}
-    )
-    columns: Optional[List[str]] = field(
-        default_factory=list,
-        metadata={"help": "The column names in dataset used for template based training."}
-    )
-    labels_to_ids: Optional[Dict] = field(
-        default_factory=dict,
-        metadata={"help": "The labels with corresponding class id in classification"}
     )
 
 def main():
@@ -101,14 +82,16 @@ def main():
 
     model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path,
-        load_in_8bit=True,
+        load_in_8bit=model_args.train_in_8bit,
         device_map="auto",
         low_cpu_mem_usage=True,
     )
 
     tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
-    if tokenizer.pad_token_id is None:
+    if tokenizer.pad_token is None or tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
         tokenizer.pad_token_id = tokenizer.eos_token_id
+
     # ### Prepare model for training
     #
     # Some pre-processing needs to be done before training such an int8 model using `peft`, therefore let's import an utiliy function `prepare_model_for_int8_training` that will:
@@ -117,13 +100,24 @@ def main():
     # - Enable gradient checkpointing for more memory-efficient training
     # - Cast the output logits in `float32` for smoother sampling during the sampling procedure
 
-
-    if "gpt-neox" in model_args.model_name_or_path:
-        model = prepare_model_for_int8_training(
-            model, output_embedding_layer_name="embed_out", layer_norm_names=["layer_norm", "layernorm"], cast_dtype=torch.float32
-        )
+    if model_args.train_in_8bit:
+        if 'GPTNeoX' in model.config.architectures[0]:
+            model = prepare_model_for_int8_training(
+                model, output_embedding_layer_name="embed_out", layer_norm_names=["layer_norm", "layernorm"], cast_dtype=torch.float32
+            )
+        else:
+            model = prepare_model_for_int8_training(model, cast_dtype=torch.float32)
     else:
-        model = prepare_model_for_int8_training(model, cast_dtype=torch.float32)
+        if hasattr(model, "enable_input_require_grads"):
+            model.enable_input_require_grads()
+        else:
+            def make_inputs_require_grad(module, input, output):
+                output.requires_grad_(True)
+
+            model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+
+        # enable gradient checkpointing for memory efficiency
+        model.gradient_checkpointing_enable()
 
 
     # ### Apply LoRA
@@ -145,47 +139,44 @@ def main():
 
 
     target_modules = None
-    if "gpt-neox" in model_args.model_name_or_path:
+    if 'GPTNeoX' in model.config.architectures[0]:
         target_modules = ["query_key_value", "xxx"]  # workaround to use 8bit training on this model
     config = LoraConfig(
-        r=16, lora_alpha=32, target_modules=target_modules, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM"
+        r=16, lora_alpha=32, target_modules=target_modules, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM", inference_mode=False
     )
 
     model = get_peft_model(model, config)
     print_trainable_parameters(model)
 
     # load dataset
-    ids_to_labels = {id:label for label, id in data_args.labels_to_ids.items()}
-    if '/' in data_args.dataset_name:
-        dataset_names = data_args.dataset_name.split('/')
-        data = load_dataset(dataset_names[0], dataset_names[1])
-    else:
-        data = load_dataset(data_args.dataset_name)
-    dataset_keys = [key for key in data.keys()]
-    data = get_prompt_dataset(dataset=data,
-                              tokenizer=tokenizer,
-                              max_len=data_args.max_len,
-                              max_label_len=data_args.max_label_len,
-                              prefix=data_args.prefix,
-                              suffix=data_args.suffix,
-                              columns=data_args.columns,
-                              ids_to_labels=ids_to_labels,                           
-                            )
-    
-    if training_args.do_eval:
-        eval_dataloader = get_eval_dataloader(data[dataset_keys[1]], training_args.per_device_eval_batch_size)
+    df = DatasetFactory(tokenizer)
 
+    loaded_dataset = df.load_dataset(
+        name=data_args.dataset_name,
+        max_len=data_args.max_len,
+        batch_size=training_args.per_device_eval_batch_size
+    )
+
+    data = loaded_dataset.dataset
+    suffix = loaded_dataset.suffix
+    max_label_len = loaded_dataset.max_label_len
+    ids_to_labels = loaded_dataset.ids_to_labels
+    labels_to_ids = {value:key for key, value in ids_to_labels.items()}
+  
+    if training_args.do_eval:
+        eval_dataloader = loaded_dataset.get_eval_dataloader()
         def validation_step(model, tokenizer, batch, first):
-            generated_ids = model.generate(
-                input_ids=batch['input_ids'].to(model.device),
-                attention_mask=batch['attention_mask'].to(model.device),
-                max_new_tokens=data_args.max_label_len,
-                eos_token_id = tokenizer.eos_token_id,
-                pad_token_id = tokenizer.pad_token_id,
-            )
+            with torch.cuda.amp.autocast():
+                generated_ids = model.generate(
+                    input_ids=batch['input_ids'].to(model.device),
+                    attention_mask=batch['attention_mask'].to(model.device),
+                    max_new_tokens=max_label_len,
+                    eos_token_id = tokenizer.eos_token_id,
+                    pad_token_id = tokenizer.pad_token_id,
+                )
             generated_txt = []
             for i, g in enumerate(generated_ids):
-                decoded_txt = tokenizer.decode(g.tolist(), skip_special_tokens=True).split(data_args.suffix)
+                decoded_txt = tokenizer.decode(g.tolist(), skip_special_tokens=True).split(suffix)
                 generated_txt.append(decoded_txt[-1].strip())
             
             labels = batch['decoded_labels']
@@ -210,7 +201,7 @@ def main():
                 labels.extend(i['labels'])
                 for txt in i['generated']:
                     try:
-                        pred_id = data_args.labels_to_ids[txt]
+                        pred_id = labels_to_ids[txt]
                     except:
                         pred_id = -100
                     preds.append(pred_id)
@@ -268,7 +259,7 @@ def main():
             model=model,
             train_dataset=data["train"],
             args=training_args,
-            data_collator=collate_fn,
+            data_collator=loaded_dataset.train_collator,
         )
         if training_args.do_eval:
             trainer.add_callback(EvaluationCallback)
@@ -294,12 +285,11 @@ def main():
     # model = PeftModel.from_pretrained(model, peft_model_id)
     # # You can then directly use the trained model or the model that you have loaded from the 🤗 Hub for inference
 
-    batch = tokenizer("다음 제목의 주제를 IT과학, 경제, 사회, 생활문화, 세계, 스포츠, 정치 중 하나로 분류하세요.\n기업들 현금 실탄 쌓자…코로나 위기에 자산 처분 잇따라\n주제:", return_tensors="pt")
-    batch.to('cuda')
-    with torch.cuda.amp.autocast():
-        output_tokens = model.generate(input_ids = batch['input_ids'], max_new_tokens=data_args.max_label_len + 1)
-
-    logger.info(f"Generated: {tokenizer.decode(output_tokens[0], skip_special_tokens=True)}")
+    # batch = tokenizer("다음 제목의 주제를 IT과학, 경제, 사회, 생활문화, 세계, 스포츠, 정치 중 하나로 분류하세요.\n기업들 현금 실탄 쌓자…코로나 위기에 자산 처분 잇따라\n주제:", return_tensors="pt")
+    # batch.to('cuda')
+    # with torch.cuda.amp.autocast():
+    #     output_tokens = model.generate(input_ids = batch['input_ids'], max_new_tokens=data_args.max_label_len + 1)
+    # logger.info(f"Generated: {tokenizer.decode(output_tokens[0], skip_special_tokens=True)}")
 
 if __name__ == "__main__":
     main()
