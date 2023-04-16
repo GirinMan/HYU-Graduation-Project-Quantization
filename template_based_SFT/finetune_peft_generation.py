@@ -1,4 +1,5 @@
 import datetime, os, sys, json, torch, wandb
+import evaluate as eval_metrics
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict
 from time import time
@@ -6,7 +7,6 @@ from datasets import load_dataset
 from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model, prepare_model_for_int8_training
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, TrainingArguments, Trainer, TrainerCallback, set_seed
 from loguru import logger
-from sklearn.metrics import accuracy_score, f1_score
 from tqdm import tqdm
 from dataset_factory import DatasetFactory
 
@@ -44,9 +44,11 @@ def main():
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
+        copy_config = True
         json_file = os.path.abspath(sys.argv[1])
         model_args, data_args, training_args = parser.parse_json_file(json_file=json_file)
     else:
+        copy_config = False
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
     KST = datetime.timezone(datetime.timedelta(hours=9))
@@ -58,10 +60,31 @@ def main():
     training_args.run_name = training_args.run_name + "-" + timestamp[0] + "-" + timestamp[1][:8]
 
     os.makedirs(training_args.output_dir, exist_ok=True)
-    with open(json_file, 'r') as openfile:
-        config_object = json.load(openfile)
-    with open(training_args.output_dir + '/running_config.json', "w") as outfile:
-        json.dump(config_object, outfile)
+    if copy_config:
+        with open(json_file, 'r') as openfile:
+            config_object = json.load(openfile)
+        with open(training_args.output_dir + '/running_config.json', "w") as outfile:
+            json.dump(config_object, outfile)
+    else:
+        configs = sys.argv[2:]
+        config_object = {}
+        for i in range(int(len(configs)/2)):
+            key = configs[i*2].split('--')[-1]
+            value = configs[i*2 + 1]
+            try:
+                value = int(value)
+            except:
+                try:
+                    value = float(value)
+                except:
+                    pass
+            if value == 'True':
+                value = True
+            elif value == 'False':
+                value = False
+            config_object[key] = value
+        with open(training_args.output_dir + '/running_config.json', "w") as outfile:
+            json.dump(config_object, outfile)
 
     logger.add(training_args.output_dir + '/{time}_train.log')
 
@@ -160,10 +183,9 @@ def main():
     data = loaded_dataset.dataset
     suffix = loaded_dataset.suffix
     max_label_len = loaded_dataset.max_label_len
-    ids_to_labels = loaded_dataset.ids_to_labels
-    labels_to_ids = {value:key for key, value in ids_to_labels.items()}
   
     if training_args.do_eval:
+        rouge = eval_metrics.load('rouge')
         eval_dataloader = loaded_dataset.get_eval_dataloader()
         def validation_step(model, tokenizer, batch, first):
             with torch.cuda.amp.autocast():
@@ -184,7 +206,7 @@ def main():
             if first:
                 count = 0
                 for gold, gen_txt in zip(labels, generated_txt):
-                    logger.debug(f'gold: {ids_to_labels[gold]} pred: {gen_txt}')
+                    logger.debug(f'gold: {gold} pred: {gen_txt}')
                     count += 1
                     if count > 4:
                         break
@@ -199,32 +221,12 @@ def main():
             for i in outputs:
                 generated_txt.extend(i['generated'])
                 labels.extend(i['labels'])
-                for txt in i['generated']:
-                    try:
-                        pred_id = labels_to_ids[txt]
-                    except:
-                        pred_id = -100
-                    preds.append(pred_id)
-
-            class_ids = [key for key, value in ids_to_labels.items()]
-            is_binary = False
-            if -100 not in preds:
-                if (0 in class_ids) and (1 in class_ids) and (len(class_ids) == 2):
-                    is_binary = True
-            else:
-                class_ids.append(-100)
-
-            acc = accuracy_score(labels, preds)
-            if is_binary:
-                f1 = f1_score(labels, preds)
-            else:
-                f1 = f1_score(y_true=labels, y_pred=preds, labels=class_ids, average="macro")
-
-            metrics = {}
-            metrics['accuracy'] = acc
-            metrics['f1'] = f1
-            metrics['error'] = accuracy_score([-100] * len(preds), preds)
-
+            
+            metrics = rouge.compute(predictions=generated_txt,
+                                    references=labels,
+                                    # tokenizer=lambda x: x.split(),
+                                    )
+            
             return metrics
 
         def evaluate(eval_dataloader):
@@ -237,16 +239,16 @@ def main():
 
         class EvaluationCallback(TrainerCallback):
             def on_train_begin(self, args: TrainingArguments, state, control, logs=None, **kwargs):
-                wandb.log({"accuracy" : 0.0, "f1": 0.0, "eval_epoch" : 0.0})
+                wandb.log({"rouge1" : 0.0, "rouge2": 0.0, "rougeL": 0.0, "rougeLsum": 0.0, "eval_epoch" : 0.0})
             
             def on_epoch_end(self, args, state, control, logs=None, **kwargs):
                 logger.info(f"***Evaluation at epoch {state.epoch} begins***")
                 metrics = evaluate(eval_dataloader)
-                wandb.log({"accuracy" : metrics['accuracy'], "f1": metrics['f1'], "eval_epoch" : state.epoch})
                 logger.info(f"***Evaluation results***")
-                logger.info(f"accuracy: {metrics['accuracy']}")
-                logger.info(f"f1: {metrics['f1']}")
-                logger.info(f"error rate: {metrics['error']}")
+                for key, value in metrics.items():
+                    logger.info(f"{key}: {value}")
+                metrics['eval_epoch'] = state.epoch
+                wandb.log(metrics)
                 save_dir = training_args.output_dir + f"/checkpoint-{state.global_step}"
                 os.makedirs(save_dir, exist_ok=True)
                 model.save_pretrained(save_dir)
