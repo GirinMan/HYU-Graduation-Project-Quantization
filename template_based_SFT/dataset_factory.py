@@ -5,6 +5,7 @@ from template_datasets.rte import RTE
 from template_datasets.mnli import MNLI
 from template_datasets.boolq import BoolQ
 from template_datasets.hellaswag import HellaSWAG
+from template_datasets.samsum import SAMSum
 
 class DatasetFactory():
     def __init__(self, tokenizer):
@@ -15,6 +16,7 @@ class DatasetFactory():
             "mnli" : MNLI,
             "boolq" : BoolQ,
             "hellaswag" : HellaSWAG,
+            "samsum" : SAMSum,
         }
         self.tokenizer = tokenizer
 
@@ -45,7 +47,7 @@ if __name__ == '__main__':
     df.show_datasets()
     
     loaded = df.load_dataset('imdb', max_len=160, batch_size=2)
-    loaded = df.load_dataset('hellaswag', max_len=350, batch_size=1, debug=True)
+    loaded = df.load_dataset('samsum', max_len=512, batch_size=1, debug=True)
 
     dataset = loaded.dataset
     train = loaded.get_train_dataloader()
