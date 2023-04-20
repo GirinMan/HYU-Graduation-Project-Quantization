@@ -1,22 +1,21 @@
 # HYU-Graduation-Project-Quantization
 한양대학교 컴퓨터소프트웨어학부 졸업 프로젝트 진행용 레포지토리입니다.
 
-## 자연어 처리 언어모델(BERT, T5)의 양자화를 통한 추론성능 개선
+## 자연어 처리 언어모델의 양자화와 어댑터를 활용한 memory-efficient finetuning 시스템 개발
 2022-2 ~ 2023-1 한양대학교 컴퓨터소프트웨어학부 졸업 프로젝트
 #### 지도교수: 서지원 <br> 팀원: 이성진, 조한빛, 황태경
 
 ### 프로젝트 개요
 - 현재 자연어 처리 모델의 크기는 계속 증가하는 추세이다. 모델의 크기가 증가함에 따라 실제 서비스에서 다양한 최적화 기술들의 필요성이 대두되고 있다. 대표적인 모델 최적화 기술들 중 하나로 quantization이 있으며, 이는 실제 서비스에서의 임베디드 및 모바일 배포를 위해 자주 사용된다.
-- Quantization에 동일한 자료형을 사용할 지라도 그 활용 방법에 따라 symmetric과 asymetric으로 나뉘며, 자료형의 선택 기준에 따라 다시 single-precision과 mixed-precision으로 나뉜다. 프로젝트 목표는 다음 사항들이 모델의 성능에 어떤 영향을 미치는지 분석하는 것이다.
+- 최근 들어 GPT-3를 비롯한 Billion scale의 모델의 사용 빈도가 매우 크게 늘었는데, 기존의 transformer-decoder 아키텍처를 그대로 사용하며 파라미터 규모와 학습 데이터를 크게 늘린 것 만으로도 다양한 NLU task에 대해 SOTA를 달성하고 few-shot 등 in-context learning이 가능해지는 등 활용 가능성이 크게 늘었다.
+- 자연어 처리 모델 사이즈가 기하급수적으로 커졌기 때문에 추론 및 학습을 전용 장비가 없는 개인이 진행하기는 매우 어려워졌다. FP32 기준 10B 모델의 경우 파라미터 용량이 40GB에 육박해 일반적인 사용자용 GPU로는 학습은 커녕 추론조차 매우 어렵다.
+- 이 프로젝트에서는 기존 방식으로는 사용자용 저사양 GPU에서 수행하기 어려웠던 자연어 처리 모델의 finetuning 과정을 8bit-quantization과 adapter를 활용하여 정확도 저하가 거의 없이 고성능 GPU 인프라에서 진행한 것과 거의 같은 결과를 얻을 수 있도록 하는 시스템을 개발한다. 
 
 ### 주요 목표
-- Layer 별로 다른 자료형을 적용
-예시) 첫 번째와 마지막 layer는 INT8을 사용하고, 나머지 layer에서는 INT4를 사용하여 양자화
-- Layer 내에서, channel 별로 다른 자료형을 적용
-특정 convolutional layer 내에서 output channel 별로 다른 자료형을 사용하여 양자화
-- Signed/Unsigned 자료형의 응용
-양자화 된 모델에서 0 값을 어떻게 활용할 것인가를 결정
-(해당 내용은 교육을 통해 의미 파악 가능)
+- LoRA adapter와 template based tuning을 활용하여 GPT 모델을 모든 task에 대해 memory-efficient하게 finetuning할 수 있도록 하는 pipeline 구축
+- 같은 GPU 장치에서 모델을 8bit quantization을 적용하고 튜닝했을 때와 적용하지 않았을 때의 성능 비교
+- 같은 모델, 같은 task에 대해 Quantization을 적용하여 저사양 GPU에서 학습한 결과와 고사양 GPU에서 fp16으로 학습한 결과 task 성능 비교
+- 대형 언어모델의 정확도를 떨어트리지 않으면서 8bit quantization을 수행할 수 있는 LLM.int8()과 타 quantization 방식의 성능 비교
 
 ## 과제 진행 일정
 - **2022 여름 방학**
