@@ -5,6 +5,9 @@
 2022-2 ~ 2023-1 한양대학교 컴퓨터소프트웨어학부 졸업 프로젝트
 #### 지도교수: 서지원 <br> 팀원: 이성진, 조한빛, 황태경
 
+### NEW! 2023-04-25 발표 자료 업로드
+https://github.com/GirinMan/HYU-Graduation-Project-Quantization/blob/main/Memory_efficient_finetuning_using_quantization.pdf
+
 ### 프로젝트 개요
 - 현재 자연어 처리 모델의 크기는 계속 증가하는 추세이다. 모델의 크기가 증가함에 따라 실제 서비스에서 다양한 최적화 기술들의 필요성이 대두되고 있다. 대표적인 모델 최적화 기술들 중 하나로 quantization이 있으며, 이는 실제 서비스에서의 임베디드 및 모바일 배포를 위해 자주 사용된다.
 - 최근 들어 GPT-3를 비롯한 Billion scale의 모델의 사용 빈도가 매우 크게 늘었는데, 기존의 transformer-decoder 아키텍처를 그대로 사용하며 파라미터 규모와 학습 데이터를 크게 늘린 것 만으로도 다양한 NLU task에 대해 SOTA를 달성하고 few-shot 등 in-context learning이 가능해지는 등 활용 가능성이 크게 늘었다.
